@@ -204,7 +204,7 @@ public class NotificationThreads extends ThreadGroup implements PushQueue {
 	 * 
 	 * @param devices a large list of devices
 	 * @param threads the number of threads to group devices for
-	 * @return
+	 * @return groups of devices or payload/device pairs ready to be dispatched to worker threads.
 	 */
 	private static List<List> makeGroups(List objects, int threads) {
 		List<List> groups = new Vector<List>(threads);

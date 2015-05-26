@@ -48,6 +48,9 @@ public class PushNotificationManager {
 	private static boolean useEnhancedNotificationFormat = true;
 
 	private static boolean heavyDebugMode = false;
+	
+	/* When an error-response packet is received, resend notifications to devices following the one in error? */
+	private static boolean resendFeatureEnabled = true;
 
 	/* Connection helper */
 	private ConnectionToAppleServer connectionToAppleServer;
@@ -238,11 +241,16 @@ public class PushNotificationManager {
 				int toResend = notificationsToResend.size();
 				logger.debug("Found " + toResend + " notifications that must be re-sent");
 				if (toResend > 0) {
-					logger.debug("Restarting connection to resend notifications");
-					restartPreviousConnection();
-					for (PushedNotification pushedNotification : notificationsToResend) {
-						sendNotification(pushedNotification, false);
-					}
+                    if (resendFeatureEnabled) {
+                        logger.debug("Restarting connection to resend notifications");
+                        restartPreviousConnection();
+                        for (PushedNotification pushedNotification : notificationsToResend) {
+                            sendNotification(pushedNotification, false);
+                        }
+                        break;
+                    } else {
+                        logger.debug("Automated re-send feature is disabled.");
+                    }
 				}
 				int remaining = responsesReceived = ResponsePacketReader.processResponses(this);
 				if (remaining == 0) {
@@ -727,7 +735,6 @@ public class PushNotificationManager {
 	/**
 	 * Get the internal list of pushed notifications.
 	 * 
-	 * @return
 	 */
 	Map<Integer, PushedNotification> getPushedNotifications() {
 		return pushedNotifications;
@@ -797,4 +804,12 @@ public class PushNotificationManager {
 
 		return alert.toString();
 	}
+	
+	public static void setResendFeatureEnabled(boolean resendFeatureEnabled) {
+        PushNotificationManager.resendFeatureEnabled = resendFeatureEnabled;
+    }
+
+    public static boolean isResendFeatureEnabled() {
+        return resendFeatureEnabled;
+    }
 }
