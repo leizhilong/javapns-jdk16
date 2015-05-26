@@ -1,11 +1,14 @@
 package javapns.notification.transmission;
 
-import java.util.*;
-
-import javapns.communication.exceptions.*;
-import javapns.devices.*;
-import javapns.devices.exceptions.*;
+import javapns.communication.exceptions.CommunicationException;
+import javapns.communication.exceptions.KeystoreException;
+import javapns.devices.Device;
+import javapns.devices.Devices;
+import javapns.devices.exceptions.InvalidDeviceTokenFormatException;
 import javapns.notification.*;
+
+import java.util.List;
+import java.util.Vector;
 
 /**
  * <h1>Pushes payloads asynchroneously using a dedicated thread.</h1>
@@ -50,13 +53,17 @@ public class NotificationThread implements Runnable, PushQueue {
 	};
 
 	private static final int DEFAULT_MAXNOTIFICATIONSPERCONNECTION = 200;
+	private static final long DEFAULT_MAX_AGE = 10*60*1000; //10 Minutes
 
 	private Thread thread;
 	private boolean started = false;
 	private PushNotificationManager notificationManager;
 	private AppleNotificationServer server;
 	private int maxNotificationsPerConnection = DEFAULT_MAXNOTIFICATIONSPERCONNECTION;
-	private long sleepBetweenNotifications = 0;
+	private long maxConnectionAgeMillis = DEFAULT_MAX_AGE;
+    private long connectionStartTime;
+
+    private long sleepBetweenNotifications = 0;
 	private NotificationProgressListener listener;
 	private int threadNumber = 1;
 	private int nextMessageIdentifier = 1;
@@ -212,7 +219,7 @@ public class NotificationThread implements Runnable, PushQueue {
 		busy = true;
 		try {
 			int total = size();
-			notificationManager.initializeConnection(server);
+            initializeConnection();
 			for (int i = 0; i < total; i++) {
 				Device device;
 				Payload payload;
@@ -231,12 +238,12 @@ public class NotificationThread implements Runnable, PushQueue {
 					if (sleepBetweenNotifications > 0) Thread.sleep(sleepBetweenNotifications);
 				} catch (InterruptedException e) {
 				}
-				if (i != 0 && i % maxNotificationsPerConnection == 0) {
-					if (listener != null) listener.eventConnectionRestarted(this);
-					notificationManager.restartConnection(server);
-				}
+				if (isConnectionOverDeliveryLimit(i)) {
+                    restartConnection();
+                }
 			}
 			notificationManager.stopConnection();
+            connectionStartTime = System.currentTimeMillis();
 		} catch (KeystoreException e) {
 			this.exception = e;
 			if (listener != null) listener.eventCriticalException(this, e);
@@ -254,7 +261,7 @@ public class NotificationThread implements Runnable, PushQueue {
 	private void runQueue() {
 		if (listener != null) listener.eventThreadStarted(this);
 		try {
-			notificationManager.initializeConnection(server);
+            initializeConnection();
 			int notificationsPushed = 0;
 			while (mode == MODE.QUEUE) {
 				while (!messages.isEmpty()) {
@@ -269,14 +276,16 @@ public class NotificationThread implements Runnable, PushQueue {
 						if (sleepBetweenNotifications > 0) Thread.sleep(sleepBetweenNotifications);
 					} catch (InterruptedException e) {
 					}
-					if (notificationsPushed != 0 && notificationsPushed % maxNotificationsPerConnection == 0) {
-						if (listener != null) listener.eventConnectionRestarted(this);
-						notificationManager.restartConnection(server);
+					if (isConnectionOverDeliveryLimit(notificationsPushed)) {
+                        restartConnection();
 					}
 					busy = false;
 				}
 				try {
 					Thread.sleep(10 * 1000);
+                    if (hasConnectionExpired()) {
+                        restartConnection();
+                    }
 				} catch (Exception e) {
 				}
 			}
@@ -293,8 +302,27 @@ public class NotificationThread implements Runnable, PushQueue {
 		if (this.thread.getThreadGroup() instanceof NotificationThreads) ((NotificationThreads) this.thread.getThreadGroup()).threadFinished(this);
 	}
 
+    private boolean isConnectionOverDeliveryLimit(int notificationsPushed) {
+        return notificationsPushed != 0 && notificationsPushed % maxNotificationsPerConnection == 0;
+    }
 
-	public PushQueue add(Payload payload, String token) throws InvalidDeviceTokenFormatException {
+    private boolean hasConnectionExpired() {
+        return (System.currentTimeMillis() - connectionStartTime) > getMaxConnectionAgeMillis();
+    }
+
+    private void initializeConnection() throws CommunicationException, KeystoreException {
+        notificationManager.initializeConnection(server);
+        connectionStartTime = System.currentTimeMillis();
+    }
+
+    private void restartConnection() throws CommunicationException, KeystoreException {
+        if (listener != null) listener.eventConnectionRestarted(this);
+        notificationManager.restartConnection(server);
+        connectionStartTime = System.currentTimeMillis();
+    }
+
+
+    public PushQueue add(Payload payload, String token) throws InvalidDeviceTokenFormatException {
 		return add(new PayloadPerDevice(payload, token));
 	}
 
@@ -333,8 +361,15 @@ public class NotificationThread implements Runnable, PushQueue {
 		return maxNotificationsPerConnection;
 	}
 
+    public long getMaxConnectionAgeMillis() {
+        return maxConnectionAgeMillis;
+    }
 
-	/**
+    public void setMaxConnectionAgeMillis(long maxConnectionAgeMillis) {
+        this.maxConnectionAgeMillis = maxConnectionAgeMillis;
+    }
+
+    /**
 	 * Set a delay the thread should sleep between each notification.
 	 * This is sometimes useful when communication with Apple servers is
 	 * unreliable and notifications are streaming too fast.
